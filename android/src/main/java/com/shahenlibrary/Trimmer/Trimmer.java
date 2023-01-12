@@ -1,4 +1,4 @@
-package com.instagramrepost.trimmer;
+package com.shahenlibrary.Trimmer;
 
 import android.annotation.TargetApi;
 import android.content.Context;
