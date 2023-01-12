@@ -288,7 +288,7 @@ class RNVideoTrimmer: NSObject {
 
 
 
-        exportSession.timeRange = timeRange
+//         exportSession.timeRange = timeRange
         exportSession.exportAsynchronously{
             switch exportSession.status {
             case .completed:
