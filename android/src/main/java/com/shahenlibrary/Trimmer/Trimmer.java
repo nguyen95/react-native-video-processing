@@ -6,46 +6,60 @@ import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.util.Base64;
 import android.util.Log;
 
-import com.facebook.react.bridge.ReadableArray;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.coremedia.iso.boxes.Container;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.uimanager.ThemedReactContext;
+import com.googlecode.mp4parser.authoring.Movie;
+import com.googlecode.mp4parser.authoring.Track;
+import com.googlecode.mp4parser.authoring.builder.DefaultMp4Builder;
+import com.googlecode.mp4parser.authoring.container.mp4.MovieCreator;
+import com.googlecode.mp4parser.authoring.tracks.AppendTrack;
+import com.googlecode.mp4parser.authoring.tracks.CroppedTrack;
 import com.shahenlibrary.Events.Events;
 import com.shahenlibrary.interfaces.OnCompressVideoListener;
-import com.shahenlibrary.interfaces.OnTrimVideoListener;
 import com.shahenlibrary.utils.VideoEdit;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.channels.FileChannel;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Formatter;
+import java.util.GregorianCalendar;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.UUID;
 
 import wseemann.media.FFmpegMediaMetadataRetriever;
-
-import java.util.UUID;
-import java.io.FileOutputStream;
-import java.util.Arrays;
-import java.util.ArrayList;
-
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.InputStream;
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
-import android.os.AsyncTask;
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-
-import java.security.NoSuchAlgorithmException;
-import java.security.MessageDigest;
-import java.util.Formatter;
 
 
 public class Trimmer {
@@ -99,7 +113,7 @@ public class Trimmer {
 
                 StringBuilder sInput = new StringBuilder();
 
-                while((line=input.readLine()) != null) {
+                while ((line = input.readLine()) != null) {
                     Log.d(LOG_TAG, "processing ffmpeg");
                     System.out.println(sInput);
                     sInput.append(line);
@@ -109,12 +123,12 @@ public class Trimmer {
                 int errorCode = p.waitFor();
                 Log.d(LOG_TAG, "ffmpeg processing completed");
 
-                if ( errorCode != 0 ) {
+                if (errorCode != 0) {
                     BufferedReader error = getErrorFromProcess(p);
                     StringBuilder sError = new StringBuilder();
 
                     Log.d(LOG_TAG, "ffmpeg error code: " + errorCode);
-                    while((line=error.readLine()) != null) {
+                    while ((line = error.readLine()) != null) {
                         System.out.println(sError);
                         sError.append(line);
                     }
@@ -126,7 +140,7 @@ public class Trimmer {
                 errorMessageFromCmd = e.toString();
             }
 
-            if ( errorMessageFromCmd != null ) {
+            if (errorMessageFromCmd != null) {
                 String errorMessage = errorMessageTitle + ": failed. " + errorMessageFromCmd;
                 if (cb != null) {
                     cb.onError(errorMessage);
@@ -164,9 +178,9 @@ public class Trimmer {
             int height = Integer.parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
             int orientation = Integer.parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
 
-            float aspectRatio = (float)width / (float)height;
+            float aspectRatio = (float) width / (float) height;
 
-            int resizeWidth = 200;
+            int resizeWidth = 300;
             int resizeHeight = Math.round(resizeWidth / aspectRatio);
 
             float scaleWidth = ((float) resizeWidth) / width;
@@ -187,9 +201,9 @@ public class Trimmer {
             mx.postRotate(orientation - 360);
 
             for (int i = 0; i < duration; i += duration / 10) {
-                Bitmap frame = retriever.getFrameAtTime(i * 1000000);
+                Bitmap frame = retriever.getFrameAtTime(i * 1000L);
 
-                Log.e(LOG_TAG, "frame: " + frame);
+                Log.e(LOG_TAG, "frame: " + i + " - " + frame);
                 if (frame == null) {
                     continue;
                 }
@@ -197,10 +211,11 @@ public class Trimmer {
 
                 Bitmap normalizedBmp = Bitmap.createBitmap(currBmp, 0, 0, resizeWidth, resizeHeight, mx, true);
                 ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-                normalizedBmp.compress(Bitmap.CompressFormat.PNG, 90, byteArrayOutputStream);
+                normalizedBmp.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream);
                 byte[] byteArray = byteArrayOutputStream.toByteArray();
                 String encoded = "data:image/png;base64," + Base64.encodeToString(byteArray, Base64.DEFAULT);
                 images.pushString(encoded);
+                Log.e(LOG_TAG, "encoded: " + i + " - " + encoded.substring(20, 40));
             }
 
             WritableMap event = Arguments.createMap();
@@ -269,57 +284,66 @@ public class Trimmer {
         String source = options.getString("source");
         String startTime = options.getString("startTime");
         String endTime = options.getString("endTime");
+        int start = getTimeFromString(startTime);
+        int end = getTimeFromString(endTime);
+        try {
+            trim(source.replace("file://", ""), start, end, ctx, promise);
+        } catch (IOException e) {
+            promise.reject("errorMessage");
+            throw new RuntimeException(e);
+        }
 
-        final File tempFile = createTempFile("mp4", promise, ctx);
-
-        ArrayList<String> cmd = new ArrayList<String>();
-        cmd.add("-y"); // NOTE: OVERWRITE OUTPUT FILE
-
-        // NOTE: INPUT FILE
-        cmd.add("-i");
-        cmd.add(source);
-
-        // NOTE: PLACE ARGUMENTS FOR FFMPEG IN THIS ORDER:
-        // 1. "-i" (INPUT FILE)
-        // 2. "-ss" (START TIME)
-        // 3. "-to" (END TIME) or "-t" (TRIM TIME)
-        // OTHERWISE WE WILL LOSE ACCURACY AND WILL GET WRONG CLIPPED VIDEO
-
-        cmd.add("-ss");
-        cmd.add(startTime);
-
-        cmd.add("-to");
-        cmd.add(endTime);
-
-        cmd.add("-preset");
-        cmd.add("ultrafast");
-        // NOTE: DO NOT CONVERT AUDIO TO SAVE TIME
-        cmd.add("-c:v");
-        cmd.add("copy");
-        cmd.add("-c:a");
-        cmd.add("copy");
-        // NOTE: FLAG TO CONVER "AAC" AUDIO CODEC
-        // cmd.add("-strict");
-        // cmd.add("-2");
-        // NOTE: OUTPUT FILE
-        cmd.add(tempFile.getPath());
-
-        executeFfmpegCommand(cmd, tempFile.getPath(), ctx, promise, "Trim error", null);
+//        final File tempFile = createTempFile("mp4", promise, ctx);
+//
+//        ArrayList<String> cmd = new ArrayList<String>();
+//        cmd.add("-y"); // NOTE: OVERWRITE OUTPUT FILE
+//
+//        // NOTE: INPUT FILE
+//        cmd.add("-i");
+//        cmd.add(source);
+//
+//        // NOTE: PLACE ARGUMENTS FOR FFMPEG IN THIS ORDER:
+//        // 1. "-i" (INPUT FILE)
+//        // 2. "-ss" (START TIME)
+//        // 3. "-to" (END TIME) or "-t" (TRIM TIME)
+//        // OTHERWISE WE WILL LOSE ACCURACY AND WILL GET WRONG CLIPPED VIDEO
+//
+//        cmd.add("-ss");
+//        cmd.add(startTime);
+//
+//        cmd.add("-t");
+//        cmd.add(endTime);
+//
+////        cmd.add("-preset");
+////        cmd.add("ultrafast");
+//        // NOTE: DO NOT CONVERT AUDIO TO SAVE TIME
+////        cmd.add("-c:v");
+////        cmd.add("copy");
+////        cmd.add("-c:a");
+//        cmd.add("-c");
+//        cmd.add("copy");
+//        // NOTE: FLAG TO CONVER "AAC" AUDIO CODEC
+//        // cmd.add("-strict");
+//        // cmd.add("-2");
+//        // NOTE: OUTPUT FILE
+//        cmd.add(tempFile.getPath());
+//
+//        executeFfmpegCommand(cmd, tempFile.getPath(), ctx, promise, "Trim error", null);
     }
 
     private static ReadableMap formatWidthAndHeightForFfmpeg(int width, int height, int availableVideoWidth, int availableVideoHeight) {
         // NOTE: WIDTH/HEIGHT FOR FFMpeg NEED TO BE DEVIDED BY 2.
         // OR YOU WILL SEE BLANK WHITE LINES FROM LEFT/RIGHT (FOR CROP), OR CRASH FOR OTHER COMMANDS
-        while( width % 2 > 0 && width < availableVideoWidth ) {
+        while (width % 2 > 0 && width < availableVideoWidth) {
             width += 1;
         }
-        while( width % 2 > 0 && width > 0 ) {
+        while (width % 2 > 0 && width > 0) {
             width -= 1;
         }
-        while( height % 2 > 0 && height < availableVideoHeight ) {
+        while (height % 2 > 0 && height < availableVideoHeight) {
             height += 1;
         }
-        while( height % 2 > 0 && height > 0 ) {
+        while (height % 2 > 0 && height > 0) {
             height -= 1;
         }
 
@@ -367,10 +391,10 @@ public class Trimmer {
         int videoHeight = videoMetadata.getInt("height");
         int videoBitrate = videoMetadata.getInt("bitrate");
 
-        int width = options.hasKey("width") ? (int)( options.getDouble("width") ) : 0;
-        int height = options.hasKey("height") ? (int)( options.getDouble("height") ) : 0;
+        int width = options.hasKey("width") ? (int) (options.getDouble("width")) : 0;
+        int height = options.hasKey("height") ? (int) (options.getDouble("height")) : 0;
 
-        if ( width != 0 && height != 0 && videoWidth != 0 && videoHeight != 0 ) {
+        if (width != 0 && height != 0 && videoWidth != 0 && videoHeight != 0) {
             ReadableMap sizes = formatWidthAndHeightForFfmpeg(
                     width,
                     height,
@@ -406,16 +430,16 @@ public class Trimmer {
         cmd.add(source);
         cmd.add("-vcodec");
         cmd.add("libx264");
-        if(crf != null) {
+        if (crf != null) {
             cmd.add("-crf");
             cmd.add(Integer.toString(crf));
-        }else {
+        } else {
             cmd.add("-b:v");
             cmd.add(Double.toString(averageBitrate / 1000) + "K");
             cmd.add("-bufsize");
             cmd.add(Double.toString(averageBitrate / 2000) + "K");
         }
-        if ( width != 0 && height != 0 ) {
+        if (width != 0 && height != 0) {
             cmd.add("-vf");
             cmd.add("scale=" + Integer.toString(width) + ":" + Integer.toString(height));
         }
@@ -441,7 +465,7 @@ public class Trimmer {
         File tempFile = null;
         try {
             tempFile = File.createTempFile(imageName, "." + extension, cacheDir);
-        } catch( IOException e ) {
+        } catch (IOException e) {
             promise.reject("Failed to create temp file", e.toString());
             return null;
         }
@@ -462,7 +486,7 @@ public class Trimmer {
             metadataRetriever.setDataSource(source);
 
             bmp = metadataRetriever.getFrameAtTime((long) (sec * 1000000), FFmpegMediaMetadataRetriever.OPTION_CLOSEST);
-            if(bmp == null){
+            if (bmp == null) {
                 promise.reject("Failed to get preview at requested position.");
                 return;
             }
@@ -473,7 +497,7 @@ public class Trimmer {
             metadataRetriever.release();
         }
 
-        if ( orientation != 0 ) {
+        if (orientation != 0) {
             Matrix matrix = new Matrix();
             matrix.postRotate(orientation);
             bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), matrix, true);
@@ -483,22 +507,22 @@ public class Trimmer {
 
         WritableMap event = Arguments.createMap();
 
-        if ( format == null || (format != null && format.equals("base64")) ) {
+        if (format == null || (format != null && format.equals("base64"))) {
             bmp.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream);
-            byte[] byteArray = byteArrayOutputStream .toByteArray();
+            byte[] byteArray = byteArrayOutputStream.toByteArray();
             String encoded = Base64.encodeToString(byteArray, Base64.DEFAULT);
 
             event.putString("image", encoded);
-        } else if ( format.equals("JPEG") ) {
+        } else if (format.equals("JPEG")) {
             bmp.compress(Bitmap.CompressFormat.JPEG, 100, byteArrayOutputStream);
             byte[] byteArray = byteArrayOutputStream.toByteArray();
 
             File tempFile = createTempFile("jpeg", promise, ctx);
 
             try {
-                FileOutputStream fos = new FileOutputStream( tempFile.getPath() );
+                FileOutputStream fos = new FileOutputStream(tempFile.getPath());
 
-                fos.write( byteArray );
+                fos.write(byteArray);
                 fos.close();
             } catch (java.io.IOException e) {
                 promise.reject("Failed to save image", e.toString());
@@ -529,7 +553,7 @@ public class Trimmer {
             int height = Integer.parseInt(retriever.extractMetadata(FFmpegMediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
             int orientation = Integer.parseInt(retriever.extractMetadata(FFmpegMediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
 
-            float aspectRatio = (float)width / (float)height;
+            float aspectRatio = (float) width / (float) height;
 
             int resizeHeight = 100;
             int resizeWidth = Math.round(resizeHeight * aspectRatio);
@@ -551,7 +575,7 @@ public class Trimmer {
             mx.postScale(scaleWidth, scaleHeight);
             mx.postRotate(orientation - 360);
 
-            for (int i = (int) startTime; i < (int) endTime; i += step ) {
+            for (int i = (int) startTime; i < (int) endTime; i += step) {
                 Bitmap frame = retriever.getScaledFrameAtTime((long) i * 1000000, resizeWidth, resizeHeight);
 
                 if (frame == null) {
@@ -584,10 +608,10 @@ public class Trimmer {
     }
 
     static void crop(String source, ReadableMap options, final Promise promise, ReactApplicationContext ctx) {
-        int cropWidth = (int)( options.getDouble("cropWidth") );
-        int cropHeight = (int)( options.getDouble("cropHeight") );
-        int cropOffsetX = (int)( options.getDouble("cropOffsetX") );
-        int cropOffsetY = (int)( options.getDouble("cropOffsetY") );
+        int cropWidth = (int) (options.getDouble("cropWidth"));
+        int cropHeight = (int) (options.getDouble("cropHeight"));
+        int cropOffsetX = (int) (options.getDouble("cropOffsetX"));
+        int cropOffsetY = (int) (options.getDouble("cropOffsetY"));
 
         ReadableMap videoSizes = getVideoRequiredMetadata(source, ctx);
         int videoWidth = videoSizes.getInt("width");
@@ -623,13 +647,13 @@ public class Trimmer {
         // OTHERWISE WE WILL LOSE ACCURACY AND WILL GET WRONG CLIPPED VIDEO
 
         String startTime = options.hasKey("startTime") ? options.getString("startTime") : null;
-        if ( startTime != null ) {
+        if (startTime != null) {
             cmd.add("-ss");
             cmd.add(startTime);
         }
 
         String endTime = options.hasKey("endTime") ? options.getString("endTime") : null;
-        if ( endTime != null ) {
+        if (endTime != null) {
             cmd.add("-to");
             cmd.add(endTime);
         }
@@ -747,7 +771,7 @@ public class Trimmer {
         FfmpegCmdAsyncTaskParams ffmpegCmdAsyncTaskParams = new FfmpegCmdAsyncTaskParams(cmd, pathToProcessingFile, ctx, promise, errorMessageTitle, cb);
 
         FfmpegCmdAsyncTask ffmpegCmdAsyncTask = new FfmpegCmdAsyncTask();
-        ffmpegCmdAsyncTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR ,ffmpegCmdAsyncTaskParams);
+        ffmpegCmdAsyncTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, ffmpegCmdAsyncTaskParams);
 
         return null;
     }
@@ -769,7 +793,7 @@ public class Trimmer {
         try {
             try (InputStream is = new BufferedInputStream(new FileInputStream(file))) {
                 final byte[] buffer = new byte[1024];
-                for (int read = 0; (read = is.read(buffer)) != -1;) {
+                for (int read = 0; (read = is.read(buffer)) != -1; ) {
                     messageDigest.update(buffer, 0, read);
                 }
                 is.close();
@@ -786,4 +810,100 @@ public class Trimmer {
             return f.toString();
         }
     }
+
+    public static void trim(String path, int startTime, int endTime, ReactApplicationContext context, Promise promise) throws IOException {
+        Movie movie = MovieCreator.build(path);
+        List<Track> tracks = movie.getTracks();
+        movie.setTracks(new LinkedList<>());
+
+        for (Track track : tracks) {
+            long currentSample = 0;
+            double currentTime = 0;
+            double lastTime = -1;
+            long startSample1 = -1;
+            long endSample1 = -1;
+
+            for (int i = 0; i < track.getSampleDurations().length; i++) {
+                long delta = track.getSampleDurations()[i];
+
+
+                if (currentTime > lastTime && currentTime <= startTime) {
+                    // current sample is still before the new starttime
+                    startSample1 = currentSample;
+                }
+                if (currentTime > lastTime && currentTime <= endTime) {
+                    // current sample is after the new start time and still before the new endtime
+                    endSample1 = currentSample;
+                }
+                lastTime = currentTime;
+                currentTime += (double) delta / (double) track.getTrackMetaData().getTimescale();
+                currentSample++;
+            }
+            movie.addTrack(new AppendTrack(new CroppedTrack(track, startSample1, endSample1)));
+        }
+        Container out = new DefaultMp4Builder().build(movie);
+        File cacheDir = context.getCacheDir();
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("trim-cache", ".mp4", cacheDir);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        FileOutputStream fos = new FileOutputStream(tempFile);
+        FileChannel fc = fos.getChannel();
+        out.writeContainer(fc);
+
+        fc.close();
+        fos.close();
+        WritableMap event = Arguments.createMap();
+        event.putString("source", tempFile.getAbsolutePath());
+        promise.resolve(event);
+    }
+
+
+    private static double correctTimeToSyncSample(Track track, double cutHere, boolean next) {
+        double[] timeOfSyncSamples = new double[track.getSyncSamples().length];
+        long currentSample = 0;
+        double currentTime = 0;
+        for (int i = 0; i < track.getSampleDurations().length; i++) {
+            long delta = track.getSampleDurations()[i];
+
+            if (Arrays.binarySearch(track.getSyncSamples(), currentSample + 1) >= 0) {
+                // samples always start with 1 but we start with zero therefore +1
+                timeOfSyncSamples[Arrays.binarySearch(track.getSyncSamples(), currentSample + 1)] = currentTime;
+            }
+            currentTime += (double) delta / (double) track.getTrackMetaData().getTimescale();
+            currentSample++;
+
+        }
+        double previous = 0;
+        for (double timeOfSyncSample : timeOfSyncSamples) {
+            if (timeOfSyncSample > cutHere) {
+                if (next) {
+                    return timeOfSyncSample;
+                } else {
+                    return previous;
+                }
+            }
+            previous = timeOfSyncSample;
+        }
+        return timeOfSyncSamples[timeOfSyncSamples.length - 1];
+    }
+
+    private static int getTimeFromString(String myDateString) {
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss");
+        Date date = null;
+        try {
+            date = sdf.parse(myDateString);
+            Calendar calendar = GregorianCalendar.getInstance(); // creates a new calendar instance
+            calendar.setTime(date);   // assigns calendar to given date
+            int hour = calendar.get(Calendar.HOUR);
+            int minute = calendar.get(Calendar.MINUTE);
+            int second = calendar.get(Calendar.SECOND);
+            return hour * 3600 + minute * 60 + second;
+        } catch (ParseException e) {
+            return 0;
+        }
+    }
 }
+
