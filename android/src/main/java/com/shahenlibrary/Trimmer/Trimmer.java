@@ -209,9 +209,9 @@ public class Trimmer {
                 }
                 Bitmap currBmp = Bitmap.createScaledBitmap(frame, resizeWidth, resizeHeight, false);
 
-                Bitmap normalizedBmp = Bitmap.createBitmap(currBmp, 0, 0, resizeWidth, resizeHeight, mx, true);
+//                 Bitmap normalizedBmp = Bitmap.createBitmap(currBmp, 0, 0, resizeWidth, resizeHeight, mx, true);
                 ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-                normalizedBmp.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream);
+                currBmp.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream);
                 byte[] byteArray = byteArrayOutputStream.toByteArray();
                 String encoded = "data:image/png;base64," + Base64.encodeToString(byteArray, Base64.DEFAULT);
                 images.pushString(encoded);
