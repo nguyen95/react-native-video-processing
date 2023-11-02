@@ -224,7 +224,11 @@ public class Trimmer {
 
             promise.resolve(event);
         } finally {
-            retriever.release();
+            try {
+                retriever.release();
+            } catch(IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -276,7 +280,11 @@ public class Trimmer {
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-            mmr.release();
+            try {
+                mmr.release();
+            } catch(IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
